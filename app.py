@@ -8,13 +8,17 @@ import streamlit as st
 
 FILE_PATH = "databaze_akci.csv"
 DUMMY_ARTIKLY = [
-    "00136365",
+   "00136365",
     "00136615",
     "00136616",
     "20277438",
     "20278622",
     "20279171",
     "20281496",
+    "20281563",
+    "20281565",
+    "20817752",
+    "20847344",
 ]
 
 # Načtení klíčů ze Secrets (pokud chybí, běží v lokálním režimu)
