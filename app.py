@@ -24,6 +24,29 @@ GITHUB_REPO = st.secrets.get("GITHUB_REPO", "")
 st.set_page_config(
     page_title="Rezervace Dummy Artiklů", layout="wide", page_icon="📅"
 )
+# Úprava pozadí aplikace
+st.markdown(
+    """
+    <style>
+    .stApp {
+        background-image: url("https://images.t-online.de/2026/01/EFMxUbVUxzcI/0x638:1080x607/fit-in/1080x0/image.jpg");
+        background-size: cover;
+        background-position: center;
+        background-attachment: fixed;
+    }
+    
+    /* Tento kód lehce ztmaví pozadí, aby byl text aplikace lépe čitelný */
+    .stApp::before {
+        content: "";
+        position: absolute;
+        top: 0; left: 0; width: 100%; height: 100%;
+        background-color: rgba(0, 0, 0, 0.6);
+        z-index: -1;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True
+)
 st.title("📌 Systém pro evidenci a rezervaci Dummy artiklů")
 
 
