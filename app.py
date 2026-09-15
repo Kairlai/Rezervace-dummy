@@ -24,6 +24,7 @@ GITHUB_REPO = st.secrets.get("GITHUB_REPO", "")
 st.set_page_config(
     page_title="Rezervace Dummy Artiklů", layout="wide", page_icon="📅"
 )
+
 # Úprava pozadí a stylování pro perfektní čitelnost
 st.markdown(
     """
@@ -63,7 +64,7 @@ st.markdown(
     """,
     unsafe_allow_html=True
 )
-)
+
 st.title("📌 Systém pro evidenci a rezervaci Dummy artiklů")
 
 
