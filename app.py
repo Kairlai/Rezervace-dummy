@@ -1,9 +1,12 @@
-import os
+import base64
 from datetime import datetime
+import io
+import os
 import pandas as pd
+import requests
 import streamlit as st
 
-DB_FILE = "databaze_akci.csv"
+FILE_PATH = "databaze_akci.csv"
 DUMMY_ARTIKLY = [
     "00136365",
     "00136615",
@@ -14,30 +17,96 @@ DUMMY_ARTIKLY = [
     "20281496",
 ]
 
+# Načtení klíčů ze Secrets (pokud chybí, běží v lokálním režimu)
+GITHUB_TOKEN = st.secrets.get("GITHUB_TOKEN", "")
+GITHUB_REPO = st.secrets.get("GITHUB_REPO", "")
+
 st.set_page_config(
     page_title="Rezervace Dummy Artiklů", layout="wide", page_icon="📅"
 )
 st.title("📌 Systém pro evidenci a rezervaci Dummy artiklů")
 
 
+def get_headers():
+  return {
+      "Authorization": f"token {GITHUB_TOKEN}",
+      "Accept": "application/vnd.github.v3+json",
+  }
+
+
 def nacti_databazi():
-  if not os.path.exists(DB_FILE):
+  # Lokální běh na PC bez GitHubu
+  if not GITHUB_TOKEN or not GITHUB_REPO:
+    if not os.path.exists(FILE_PATH):
+      df_empty = pd.DataFrame(
+          columns=[
+              "ID",
+              "Artikl",
+              "Název akce",
+              "Datum Od",
+              "Datum Do",
+              "Filiálka",
+              "KW",
+          ]
+      )
+      df_empty.to_csv(FILE_PATH, index=False)
+    df = pd.read_csv(FILE_PATH, dtype={"Artikl": str})
+    if "ID" not in df.columns and not df.empty:
+      df.insert(0, "ID", range(1, len(df) + 1))
+    return df, None
+
+  # Načtení souboru z GitHubu přes API
+  url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{FILE_PATH}"
+  res = requests.get(url, headers=get_headers())
+
+  if res.status_code == 200:
+    data = res.json()
+    sha = data["sha"]
+    content_str = base64.b64decode(data["content"]).decode("utf-8")
+    df = pd.read_csv(io.StringIO(content_str), dtype={"Artikl": str})
+    if "ID" not in df.columns and not df.empty:
+      df.insert(0, "ID", range(1, len(df) + 1))
+    return df, sha
+  else:
     df_empty = pd.DataFrame(
-        columns=["ID", "Artikl", "Název akce", "Datum Od", "Datum Do", "Filiálka", "KW"]
+        columns=[
+            "ID",
+            "Artikl",
+            "Název akce",
+            "Datum Od",
+            "Datum Do",
+            "Filiálka",
+            "KW",
+        ]
     )
-    df_empty.to_csv(DB_FILE, index=False)
-
-  df = pd.read_csv(DB_FILE, dtype={"Artikl": str})
-  if "ID" not in df.columns and not df.empty:
-    df.insert(0, "ID", range(1, len(df) + 1))
-  return df
+    return df_empty, None
 
 
-def uloz_databazi(df):
-  df.to_csv(DB_FILE, index=False)
+def uloz_databazi(df, sha=None):
+  if not GITHUB_TOKEN or not GITHUB_REPO:
+    df.to_csv(FILE_PATH, index=False)
+    return True
+
+  url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{FILE_PATH}"
+  csv_buffer = io.StringIO()
+  df.to_csv(csv_buffer, index=False)
+  content_b64 = base64.b64encode(csv_buffer.getvalue().encode("utf-8")).decode(
+      "utf-8"
+  )
+
+  payload = {
+      "message": "Aktualizace rezervací přes webovou aplikaci",
+      "content": content_b64,
+  }
+  if sha:
+    payload["sha"] = sha
+
+  res = requests.put(url, headers=get_headers(), json=payload)
+  return res.status_code in [200, 201]
 
 
-df_db = nacti_databazi()
+# Načtení dat při startu
+df_db, current_sha = nacti_databazi()
 
 col1, col2 = st.columns([1, 1.2])
 
@@ -50,7 +119,6 @@ with col1:
   nazev = st.text_input("Nový název artiklu / akce:").strip()
   pobocka = st.text_input("Filiálka:").strip()
 
-  # Kontrola překryvu termínů (překrývají se, pokud StartA <= EndB a EndA >= StartB)
   kolize = pd.DataFrame()
   if not df_db.empty:
     df_temp = df_db.copy()
@@ -63,13 +131,11 @@ with col1:
         & (df_temp["Datum Do"] >= datum_od)
     ]
 
-  # Zobrazení stavu termínu
   if datum_do >= datum_od:
     if not kolize.empty:
       st.error(
           f"⛔ Artikl **{vybrany_artikl}** je v tomto termínu již OBSAZEN!"
       )
-      st.caption("Existující rezervace v tomto období:")
       st.dataframe(
           kolize[["Název akce", "Datum Od", "Datum Do", "Filiálka"]],
           use_container_width=True,
@@ -78,7 +144,6 @@ with col1:
     else:
       st.success(f"✅ Artikl **{vybrany_artikl}** je v tomto termínu VOLNÝ.")
 
-  # Tlačítko uložení s kompletní validací
   if st.button("Zapsat do databáze", type="primary"):
     if not nazev or not pobocka:
       st.warning("⚠️ Prosím, vyplňte Název akce i Filiálku.")
@@ -100,16 +165,20 @@ with col1:
           "KW": kw,
       }])
 
-      df_db = pd.concat([df_db, novy_zaznam], ignore_index=True)
-      uloz_databazi(df_db)
-      st.balloons()
-      st.success(f"🎉 Úspěšně zapsáno! Akce: '{nazev}' (KW: {kw})")
-      st.rerun()
+      df_novy = pd.concat([df_db, novy_zaznam], ignore_index=True)
+
+      if uloz_databazi(df_novy, current_sha):
+        st.balloons()
+        st.success(f"🎉 Úspěšně zapsáno a trvale uloženo!")
+        st.rerun()
+      else:
+        st.error(
+            "❌ Chyba při zápisu na GitHub. Zkontrolujte nastavení Secrets."
+        )
 
 with col2:
   st.header("📊 Přehled databáze")
 
-  # Filtr podle artiklu
   filtr = st.multiselect(
       "Filtrovat podle artiklu:", options=DUMMY_ARTIKLY, default=[]
   )
@@ -119,7 +188,6 @@ with col2:
 
   st.dataframe(df_view, use_container_width=True, hide_index=True)
 
-  # Sekce pro smazání chybného záznamu
   with st.expander("🗑️ Storno / Smazání rezervace"):
     if not df_db.empty:
       id_smazat = st.number_input(
@@ -130,9 +198,11 @@ with col2:
       )
       if st.button("Smazat záznam", type="secondary"):
         if id_smazat in df_db["ID"].values:
-          df_db = df_db[df_db["ID"] != id_smazat]
-          uloz_databazi(df_db)
-          st.success(f"Rezervace ID {id_smazat} byla odstraněna.")
-          st.rerun()
+          df_upraveno = df_db[df_db["ID"] != id_smazat]
+          if uloz_databazi(df_upraveno, current_sha):
+            st.success(f"Rezervace ID {id_smazat} byla odstraněna.")
+            st.rerun()
+          else:
+            st.error("❌ Chyba při mazání z GitHubu.")
         else:
           st.warning("Zadané ID v databázi neexistuje.")
