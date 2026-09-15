@@ -8,7 +8,7 @@ import streamlit as st
 
 FILE_PATH = "databaze_akci.csv"
 DUMMY_ARTIKLY = [
-   "00136365",
+    "00136365",
     "00136615",
     "00136616",
     "20277438",
@@ -21,7 +21,7 @@ DUMMY_ARTIKLY = [
     "20847344",
 ]
 
-# Načtení klíčů ze Secrets (pokud chybí, běží v lokálním režimu)
+# Načtení klíčů ze Secrets
 GITHUB_TOKEN = st.secrets.get("GITHUB_TOKEN", "")
 GITHUB_REPO = st.secrets.get("GITHUB_REPO", "")
 
@@ -29,19 +29,16 @@ st.set_page_config(
     page_title="Rezervace Dummy Artiklů", layout="wide", page_icon="📅"
 )
 
-# Úprava pozadí a stylování pro perfektní čitelnost
+# Úprava pozadí a stylování
 st.markdown(
     """
     <style>
-    /* Hlavní pozadí s obrázkem */
     .stApp {
         background-image: url("https://images.t-online.de/2026/01/EFMxUbVUxzcI/0x638:1080x607/fit-in/1080x0/image.jpg");
         background-size: cover;
         background-position: center;
         background-attachment: fixed;
     }
-    
-    /* Celková ztmavovací vrstva pro potlačení rušivých prvků */
     .stApp::before {
         content: "";
         position: absolute;
@@ -49,8 +46,6 @@ st.markdown(
         background-color: rgba(0, 0, 0, 0.45);
         z-index: -1;
     }
-
-    /* Poloprůhledné tmavé karty pro formulář a přehled (Glassmorphism) */
     div[data-testid="stColumn"] {
         background: rgba(15, 20, 28, 0.88);
         padding: 24px;
@@ -58,15 +53,13 @@ st.markdown(
         box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.5);
         backdrop-filter: blur(8px);
     }
-
-    /* Zářivě bílá barva a stín pro všechny nadpisy i popisky polí */
     h1, h2, h3, label, p, span, .stMarkdown {
         color: #ffffff !important;
         text-shadow: 1px 1px 4px rgba(0, 0, 0, 0.9);
     }
     </style>
     """,
-    unsafe_allow_html=True
+    unsafe_allow_html=True,
 )
 
 st.title("📌 Systém pro evidenci a rezervaci Dummy artiklů")
@@ -80,7 +73,6 @@ def get_headers():
 
 
 def nacti_databazi():
-  # Lokální běh na PC bez GitHubu
   if not GITHUB_TOKEN or not GITHUB_REPO:
     if not os.path.exists(FILE_PATH):
       df_empty = pd.DataFrame(
@@ -100,7 +92,6 @@ def nacti_databazi():
       df.insert(0, "ID", range(1, len(df) + 1))
     return df, None
 
-  # Načtení souboru z GitHubu přes API
   url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{FILE_PATH}"
   res = requests.get(url, headers=get_headers())
 
@@ -150,7 +141,6 @@ def uloz_databazi(df, sha=None):
   return res.status_code in [200, 201]
 
 
-# Načtení dat při startu
 df_db, current_sha = nacti_databazi()
 
 col1, col2 = st.columns([1, 1.2])
@@ -214,7 +204,7 @@ with col1:
 
       if uloz_databazi(df_novy, current_sha):
         st.balloons()
-        st.success(f"🎉 Úspěšně zapsáno a trvale uloženo!")
+        st.success("🎉 Úspěšně zapsáno a trvale uloženo!")
         st.rerun()
       else:
         st.error(
@@ -228,10 +218,49 @@ with col2:
       "Filtrovat podle artiklu:", options=DUMMY_ARTIKLY, default=[]
   )
   df_view = df_db.copy()
+
+  if not df_view.empty:
+    today_date = datetime.today().date()
+
+    def urci_stav(row):
+      d_od = pd.to_datetime(row["Datum Od"]).date()
+      d_do = pd.to_datetime(row["Datum Do"]).date()
+      if d_do < today_date:
+        return "⚪ Minulá"
+      elif d_od <= today_date <= d_do:
+        return "🟢 Aktivní"
+      else:
+        return "🔵 Plánovaná"
+
+    df_view["Stav"] = df_view.apply(urci_stav, axis=1)
+
+    # Přebudování pořadí sloupců pro přehlednost
+    cols = [
+        "Stav",
+        "ID",
+        "Artikl",
+        "Název akce",
+        "Datum Od",
+        "Datum Do",
+        "Filiálka",
+        "KW",
+    ]
+    df_view = df_view[cols]
+
   if filtr:
     df_view = df_view[df_view["Artikl"].astype(str).isin(filtr)]
 
   st.dataframe(df_view, use_container_width=True, hide_index=True)
+
+  # Exportní tlačítko
+  if not df_db.empty:
+    csv_bytes = df_db.to_csv(index=False).encode("utf-8-sig")
+    st.download_button(
+        label="📥 Stáhnout přehled databáze (CSV/Excel)",
+        data=csv_bytes,
+        file_name=f"rezervace_dummy_{datetime.now().strftime('%Y%m%d')}.csv",
+        mime="text/csv",
+    )
 
   with st.expander("🗑️ Storno / Smazání rezervace"):
     if not df_db.empty:
