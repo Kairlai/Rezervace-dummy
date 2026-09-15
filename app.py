@@ -24,10 +24,11 @@ GITHUB_REPO = st.secrets.get("GITHUB_REPO", "")
 st.set_page_config(
     page_title="Rezervace Dummy Artiklů", layout="wide", page_icon="📅"
 )
-# Úprava pozadí aplikace
+# Úprava pozadí a stylování pro perfektní čitelnost
 st.markdown(
     """
     <style>
+    /* Hlavní pozadí s obrázkem */
     .stApp {
         background-image: url("https://images.t-online.de/2026/01/EFMxUbVUxzcI/0x638:1080x607/fit-in/1080x0/image.jpg");
         background-size: cover;
@@ -35,17 +36,33 @@ st.markdown(
         background-attachment: fixed;
     }
     
-    /* Tento kód lehce ztmaví pozadí, aby byl text aplikace lépe čitelný */
+    /* Celková ztmavovací vrstva pro potlačení rušivých prvků */
     .stApp::before {
         content: "";
         position: absolute;
         top: 0; left: 0; width: 100%; height: 100%;
-        background-color: rgba(0, 0, 0, 0.6);
+        background-color: rgba(0, 0, 0, 0.45);
         z-index: -1;
+    }
+
+    /* Poloprůhledné tmavé karty pro formulář a přehled (Glassmorphism) */
+    div[data-testid="stColumn"] {
+        background: rgba(15, 20, 28, 0.88);
+        padding: 24px;
+        border-radius: 16px;
+        box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.5);
+        backdrop-filter: blur(8px);
+    }
+
+    /* Zářivě bílá barva a stín pro všechny nadpisy i popisky polí */
+    h1, h2, h3, label, p, span, .stMarkdown {
+        color: #ffffff !important;
+        text-shadow: 1px 1px 4px rgba(0, 0, 0, 0.9);
     }
     </style>
     """,
     unsafe_allow_html=True
+)
 )
 st.title("📌 Systém pro evidenci a rezervaci Dummy artiklů")
 
