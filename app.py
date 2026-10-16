@@ -90,6 +90,9 @@ def nacti_databazi():
         df = pd.read_csv(FILE_PATH, dtype={"Artikl": str})
         if "ID" not in df.columns and not df.empty:
             df.insert(0, "ID", range(1, len(df) + 1))
+        # Doplnění nul u artiklu
+        if not df.empty:
+            df["Artikl"] = df["Artikl"].astype(str).str.zfill(8)
         return df, None
 
     url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{FILE_PATH}"
@@ -102,6 +105,9 @@ def nacti_databazi():
         df = pd.read_csv(io.StringIO(content_str), dtype={"Artikl": str})
         if "ID" not in df.columns and not df.empty:
             df.insert(0, "ID", range(1, len(df) + 1))
+        # Doplnění nul u artiklu po stažení
+        if not df.empty:
+            df["Artikl"] = df["Artikl"].astype(str).str.zfill(8)
         return df, sha
     else:
         df_empty = pd.DataFrame(
@@ -139,13 +145,11 @@ def uloz_databazi(df, sha=None):
 
     res = requests.put(url, headers=get_headers(), json=payload)
     
-    # Vracíme True a zároveň i NOVÉ SHA od GitHubu
     if res.status_code in [200, 201]:
         return True, res.json()["content"]["sha"]
     else:
         return False, None
 
-# Načítání do session state, ať se nevolá GitHub při každém kliku
 if "data_loaded" not in st.session_state:
     df_db, current_sha = nacti_databazi()
     st.session_state.df_db = df_db
@@ -170,7 +174,7 @@ with col1:
         df_temp["Datum Do"] = pd.to_datetime(df_temp["Datum Do"]).dt.date
 
         kolize = df_temp[
-            (df_temp["Artikl"].astype(str) == str(vybrany_artikl))
+            (df_temp["Artikl"].astype(str) == str(vybrany_artikl).zfill(8))
             & (df_temp["Datum Od"] <= datum_do)
             & (df_temp["Datum Do"] >= datum_od)
         ]
@@ -201,7 +205,7 @@ with col1:
 
             novy_zaznam = pd.DataFrame([{
                 "ID": nove_id,
-                "Artikl": str(vybrany_artikl),
+                "Artikl": str(vybrany_artikl).zfill(8),
                 "Název akce": nazev,
                 "Datum Od": datum_od.strftime("%Y-%m-%d"),
                 "Datum Do": datum_do.strftime("%Y-%m-%d"),
@@ -214,7 +218,7 @@ with col1:
             success, new_sha = uloz_databazi(df_novy, st.session_state.current_sha)
             if success:
                 st.session_state.df_db = df_novy
-                st.session_state.current_sha = new_sha # Uložíme nové SHA do paměti
+                st.session_state.current_sha = new_sha
                 st.balloons()
                 st.success("🎉 Úspěšně zapsáno a trvale uloženo!")
                 st.rerun()
@@ -246,7 +250,6 @@ with col2:
 
         df_view["Stav"] = df_view.apply(urci_stav, axis=1)
 
-        # Přebudování pořadí sloupců pro přehlednost
         cols = [
             "Stav",
             "ID",
@@ -260,24 +263,57 @@ with col2:
         df_view = df_view[cols]
 
     if filtr:
-        df_view = df_view[df_view["Artikl"].astype(str).isin(filtr)]
+        # Převedeme vybrané filtry na zfill(8) pro jistotu
+        filtr_8 = [str(f).zfill(8) for f in filtr]
+        df_view = df_view[df_view["Artikl"].astype(str).isin(filtr_8)]
 
     st.dataframe(df_view, use_container_width=True, hide_index=True)
 
     # Exportní tlačítko
     if not st.session_state.df_db.empty:
-        # PŘIDÁNO sep=';' pro český Excel
-        csv_bytes = st.session_state.df_db.to_csv(index=False, sep=';').encode("utf-8-sig")
-        st.download_button(
-            label="📥 Stáhnout přehled databáze (CSV/Excel)",
-            data=csv_bytes,
-            file_name=f"rezervace_dummy_{datetime.now().strftime('%Y%m%d')}.csv",
-            mime="text/csv",
-        )
+        df_export = st.session_state.df_db.copy()
+        # Pojistka pro nuly
+        df_export["Artikl"] = df_export["Artikl"].astype(str).str.zfill(8)
+        
+        output = io.BytesIO()
+        try:
+            # Vytvoření skutečného Excelu (.xlsx)
+            with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                df_export.to_excel(writer, index=False, sheet_name='Rezervace')
+                worksheet = writer.sheets['Rezervace']
+                
+                # Automatické roztahování sloupců
+                for idx, col in enumerate(df_export.columns):
+                    max_len = max(
+                        df_export[col].astype(str).map(len).max(),
+                        len(str(col))
+                    ) + 2
+                    col_letter = chr(65 + idx)
+                    worksheet.column_dimensions[col_letter].width = max_len
+
+            excel_data = output.getvalue()
+            st.download_button(
+                label="📥 Stáhnout přehled databáze (Excel XLSX)",
+                data=excel_data,
+                file_name=f"rezervace_dummy_{datetime.now().strftime('%Y%m%d')}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        except Exception:
+            # Kdyby na Streamlitu chyběl openpyxl, stáhne alespoň upravené CSV
+            # Přidání uvozovek k číslu přinutí Excel ignorovat převod na číslo
+            df_export["Artikl"] = '="' + df_export["Artikl"] + '"'
+            csv_bytes = df_export.to_csv(index=False, sep=';').encode("utf-8-sig")
+            
+            st.warning("⚠️ Pro hezčí formát buněk přidejte 'openpyxl' do requirements.txt na GitHubu!")
+            st.download_button(
+                label="📥 Stáhnout přehled databáze (Základní CSV)",
+                data=csv_bytes,
+                file_name=f"rezervace_dummy_{datetime.now().strftime('%Y%m%d')}.csv",
+                mime="text/csv",
+            )
 
     with st.expander("🗑️ Storno / Smazání rezervace"):
         if not st.session_state.df_db.empty:
-            # Ošetření, aby max_value fungovalo i když by bylo ID prázdné
             max_id = int(st.session_state.df_db["ID"].max()) if not st.session_state.df_db["ID"].isna().all() else 1
             id_smazat = st.number_input(
                 "Zadejte ID rezervace ke smazání:",
@@ -291,7 +327,7 @@ with col2:
                     success, new_sha = uloz_databazi(df_upraveno, st.session_state.current_sha)
                     if success:
                         st.session_state.df_db = df_upraveno
-                        st.session_state.current_sha = new_sha # Uložíme nové SHA
+                        st.session_state.current_sha = new_sha
                         st.success(f"Rezervace ID {id_smazat} byla odstraněna.")
                         st.rerun()
                     else:
