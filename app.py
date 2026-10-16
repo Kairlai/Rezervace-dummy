@@ -139,13 +139,13 @@ def uloz_databazi(df, sha=None):
 
     res = requests.put(url, headers=get_headers(), json=payload)
     
-    # OPRAVA 1: Vracíme True a zároveň i NOVÉ SHA od GitHubu
+    # Vracíme True a zároveň i NOVÉ SHA od GitHubu
     if res.status_code in [200, 201]:
         return True, res.json()["content"]["sha"]
     else:
         return False, None
 
-# OPRAVA 2: Načítání do session state, ať se nevolá GitHub při každém kliku
+# Načítání do session state, ať se nevolá GitHub při každém kliku
 if "data_loaded" not in st.session_state:
     df_db, current_sha = nacti_databazi()
     st.session_state.df_db = df_db
@@ -266,7 +266,8 @@ with col2:
 
     # Exportní tlačítko
     if not st.session_state.df_db.empty:
-        csv_bytes = st.session_state.df_db.to_csv(index=False).encode("utf-8-sig")
+        # PŘIDÁNO sep=';' pro český Excel
+        csv_bytes = st.session_state.df_db.to_csv(index=False, sep=';').encode("utf-8-sig")
         st.download_button(
             label="📥 Stáhnout přehled databáze (CSV/Excel)",
             data=csv_bytes,
