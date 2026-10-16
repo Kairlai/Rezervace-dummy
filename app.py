@@ -66,46 +66,189 @@ st.title("📌 Systém pro evidenci a rezervaci Dummy artiklů")
 
 
 def get_headers():
-  return {
-      "Authorization": f"token {GITHUB_TOKEN}",
-      "Accept": "application/vnd.github.v3+json",
-  }
+    return {
+        "Authorization": f"token {GITHUB_TOKEN}",
+        "Accept": "application/vnd.github.v3+json",
+    }
 
 
 def nacti_databazi():
-  if not GITHUB_TOKEN or not GITHUB_REPO:
-    if not os.path.exists(FILE_PATH):
-      df_empty = pd.DataFrame(
-          columns=[
-              "ID",
-              "Artikl",
-              "Název akce",
-              "Datum Od",
-              "Datum Do",
-              "Filiálka",
-              "KW",
-          ]
-      )
-      df_empty.to_csv(FILE_PATH, index=False)
-    df = pd.read_csv(FILE_PATH, dtype={"Artikl": str})
-    if "ID" not in df.columns and not df.empty:
-      df.insert(0, "ID", range(1, len(df) + 1))
-    return df, None
+    if not GITHUB_TOKEN or not GITHUB_REPO:
+        if not os.path.exists(FILE_PATH):
+            df_empty = pd.DataFrame(
+                columns=[
+                    "ID",
+                    "Artikl",
+                    "Název akce",
+                    "Datum Od",
+                    "Datum Do",
+                    "Filiálka",
+                    "KW",
+                ]
+            )
+            df_empty.to_csv(FILE_PATH, index=False)
+        df = pd.read_csv(FILE_PATH, dtype={"Artikl": str})
+        if "ID" not in df.columns and not df.empty:
+            df.insert(0, "ID", range(1, len(df) + 1))
+        return df, None
 
-  url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{FILE_PATH}"
-  res = requests.get(url, headers=get_headers())
+    url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{FILE_PATH}"
+    res = requests.get(url, headers=get_headers())
 
-  if res.status_code == 200:
-    data = res.json()
-    sha = data["sha"]
-    content_str = base64.b64decode(data["content"]).decode("utf-8")
-    df = pd.read_csv(io.StringIO(content_str), dtype={"Artikl": str})
-    if "ID" not in df.columns and not df.empty:
-      df.insert(0, "ID", range(1, len(df) + 1))
-    return df, sha
-  else:
-    df_empty = pd.DataFrame(
-        columns=[
+    if res.status_code == 200:
+        data = res.json()
+        sha = data["sha"]
+        content_str = base64.b64decode(data["content"]).decode("utf-8")
+        df = pd.read_csv(io.StringIO(content_str), dtype={"Artikl": str})
+        if "ID" not in df.columns and not df.empty:
+            df.insert(0, "ID", range(1, len(df) + 1))
+        return df, sha
+    else:
+        df_empty = pd.DataFrame(
+            columns=[
+                "ID",
+                "Artikl",
+                "Název akce",
+                "Datum Od",
+                "Datum Do",
+                "Filiálka",
+                "KW",
+            ]
+        )
+        return df_empty, None
+
+
+def uloz_databazi(df, sha=None):
+    if not GITHUB_TOKEN or not GITHUB_REPO:
+        df.to_csv(FILE_PATH, index=False)
+        return True, None
+
+    url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{FILE_PATH}"
+    csv_buffer = io.StringIO()
+    df.to_csv(csv_buffer, index=False)
+    content_b64 = base64.b64encode(csv_buffer.getvalue().encode("utf-8")).decode(
+        "utf-8"
+    )
+
+    payload = {
+        "message": "Aktualizace rezervací přes webovou aplikaci",
+        "content": content_b64,
+    }
+    if sha:
+        payload["sha"] = sha
+
+    res = requests.put(url, headers=get_headers(), json=payload)
+    
+    # OPRAVA 1: Vracíme True a zároveň i NOVÉ SHA od GitHubu
+    if res.status_code in [200, 201]:
+        return True, res.json()["content"]["sha"]
+    else:
+        return False, None
+
+# OPRAVA 2: Načítání do session state, ať se nevolá GitHub při každém kliku
+if "data_loaded" not in st.session_state:
+    df_db, current_sha = nacti_databazi()
+    st.session_state.df_db = df_db
+    st.session_state.current_sha = current_sha
+    st.session_state.data_loaded = True
+
+col1, col2 = st.columns([1, 1.2])
+
+with col1:
+    st.header("📝 Nová rezervace")
+
+    vybrany_artikl = st.selectbox("Číslo Dummy artiklu:", DUMMY_ARTIKLY)
+    datum_od = st.date_input("Plánované datum OD:", value=datetime.today())
+    datum_do = st.date_input("Plánované datum DO:", value=datetime.today())
+    nazev = st.text_input("Nový název artiklu / akce:").strip()
+    pobocka = st.text_input("Filiálka:").strip()
+
+    kolize = pd.DataFrame()
+    if not st.session_state.df_db.empty:
+        df_temp = st.session_state.df_db.copy()
+        df_temp["Datum Od"] = pd.to_datetime(df_temp["Datum Od"]).dt.date
+        df_temp["Datum Do"] = pd.to_datetime(df_temp["Datum Do"]).dt.date
+
+        kolize = df_temp[
+            (df_temp["Artikl"].astype(str) == str(vybrany_artikl))
+            & (df_temp["Datum Od"] <= datum_do)
+            & (df_temp["Datum Do"] >= datum_od)
+        ]
+
+    if datum_do >= datum_od:
+        if not kolize.empty:
+            st.error(
+                f"⛔ Artikl **{vybrany_artikl}** je v tomto termínu již OBSAZEN!"
+            )
+            st.dataframe(
+                kolize[["Název akce", "Datum Od", "Datum Do", "Filiálka"]],
+                use_container_width=True,
+                hide_index=True,
+            )
+        else:
+            st.success(f"✅ Artikl **{vybrany_artikl}** je v tomto termínu VOLNÝ.")
+
+    if st.button("Zapsat do databáze", type="primary"):
+        if not nazev or not pobocka:
+            st.warning("⚠️ Prosím, vyplňte Název akce i Filiálku.")
+        elif datum_do < datum_od:
+            st.error("❌ Datum DO nesmí být před datem OD.")
+        elif not kolize.empty:
+            st.error("❌ Akci nelze uložit! Termín je již obsazen.")
+        else:
+            kw = datum_od.isocalendar()[1]
+            nove_id = 1 if st.session_state.df_db.empty else int(st.session_state.df_db["ID"].max()) + 1
+
+            novy_zaznam = pd.DataFrame([{
+                "ID": nove_id,
+                "Artikl": str(vybrany_artikl),
+                "Název akce": nazev,
+                "Datum Od": datum_od.strftime("%Y-%m-%d"),
+                "Datum Do": datum_do.strftime("%Y-%m-%d"),
+                "Filiálka": pobocka,
+                "KW": kw,
+            }])
+
+            df_novy = pd.concat([st.session_state.df_db, novy_zaznam], ignore_index=True)
+
+            success, new_sha = uloz_databazi(df_novy, st.session_state.current_sha)
+            if success:
+                st.session_state.df_db = df_novy
+                st.session_state.current_sha = new_sha # Uložíme nové SHA do paměti
+                st.balloons()
+                st.success("🎉 Úspěšně zapsáno a trvale uloženo!")
+                st.rerun()
+            else:
+                st.error(
+                    "❌ Chyba při zápisu na GitHub. Zkontrolujte nastavení Secrets."
+                )
+
+with col2:
+    st.header("📊 Přehled databáze")
+
+    filtr = st.multiselect(
+        "Filtrovat podle artiklu:", options=DUMMY_ARTIKLY, default=[]
+    )
+    df_view = st.session_state.df_db.copy()
+
+    if not df_view.empty:
+        today_date = datetime.today().date()
+
+        def urci_stav(row):
+            d_od = pd.to_datetime(row["Datum Od"]).date()
+            d_do = pd.to_datetime(row["Datum Do"]).date()
+            if d_do < today_date:
+                return "⚪ Minulá"
+            elif d_od <= today_date <= d_do:
+                return "🟢 Aktivní"
+            else:
+                return "🔵 Plánovaná"
+
+        df_view["Stav"] = df_view.apply(urci_stav, axis=1)
+
+        # Přebudování pořadí sloupců pro přehlednost
+        cols = [
+            "Stav",
             "ID",
             "Artikl",
             "Název akce",
@@ -114,169 +257,43 @@ def nacti_databazi():
             "Filiálka",
             "KW",
         ]
-    )
-    return df_empty, None
+        df_view = df_view[cols]
 
+    if filtr:
+        df_view = df_view[df_view["Artikl"].astype(str).isin(filtr)]
 
-def uloz_databazi(df, sha=None):
-  if not GITHUB_TOKEN or not GITHUB_REPO:
-    df.to_csv(FILE_PATH, index=False)
-    return True
+    st.dataframe(df_view, use_container_width=True, hide_index=True)
 
-  url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{FILE_PATH}"
-  csv_buffer = io.StringIO()
-  df.to_csv(csv_buffer, index=False)
-  content_b64 = base64.b64encode(csv_buffer.getvalue().encode("utf-8")).decode(
-      "utf-8"
-  )
-
-  payload = {
-      "message": "Aktualizace rezervací přes webovou aplikaci",
-      "content": content_b64,
-  }
-  if sha:
-    payload["sha"] = sha
-
-  res = requests.put(url, headers=get_headers(), json=payload)
-  return res.status_code in [200, 201]
-
-
-df_db, current_sha = nacti_databazi()
-
-col1, col2 = st.columns([1, 1.2])
-
-with col1:
-  st.header("📝 Nová rezervace")
-
-  vybrany_artikl = st.selectbox("Číslo Dummy artiklu:", DUMMY_ARTIKLY)
-  datum_od = st.date_input("Plánované datum OD:", value=datetime.today())
-  datum_do = st.date_input("Plánované datum DO:", value=datetime.today())
-  nazev = st.text_input("Nový název artiklu / akce:").strip()
-  pobocka = st.text_input("Filiálka:").strip()
-
-  kolize = pd.DataFrame()
-  if not df_db.empty:
-    df_temp = df_db.copy()
-    df_temp["Datum Od"] = pd.to_datetime(df_temp["Datum Od"]).dt.date
-    df_temp["Datum Do"] = pd.to_datetime(df_temp["Datum Do"]).dt.date
-
-    kolize = df_temp[
-        (df_temp["Artikl"].astype(str) == str(vybrany_artikl))
-        & (df_temp["Datum Od"] <= datum_do)
-        & (df_temp["Datum Do"] >= datum_od)
-    ]
-
-  if datum_do >= datum_od:
-    if not kolize.empty:
-      st.error(
-          f"⛔ Artikl **{vybrany_artikl}** je v tomto termínu již OBSAZEN!"
-      )
-      st.dataframe(
-          kolize[["Název akce", "Datum Od", "Datum Do", "Filiálka"]],
-          use_container_width=True,
-          hide_index=True,
-      )
-    else:
-      st.success(f"✅ Artikl **{vybrany_artikl}** je v tomto termínu VOLNÝ.")
-
-  if st.button("Zapsat do databáze", type="primary"):
-    if not nazev or not pobocka:
-      st.warning("⚠️ Prosím, vyplňte Název akce i Filiálku.")
-    elif datum_do < datum_od:
-      st.error("❌ Datum DO nesmí být před datem OD.")
-    elif not kolize.empty:
-      st.error("❌ Akci nelze uložit! Termín je již obsazen.")
-    else:
-      kw = datum_od.isocalendar()[1]
-      nove_id = 1 if df_db.empty else int(df_db["ID"].max()) + 1
-
-      novy_zaznam = pd.DataFrame([{
-          "ID": nove_id,
-          "Artikl": str(vybrany_artikl),
-          "Název akce": nazev,
-          "Datum Od": datum_od.strftime("%Y-%m-%d"),
-          "Datum Do": datum_do.strftime("%Y-%m-%d"),
-          "Filiálka": pobocka,
-          "KW": kw,
-      }])
-
-      df_novy = pd.concat([df_db, novy_zaznam], ignore_index=True)
-
-      if uloz_databazi(df_novy, current_sha):
-        st.balloons()
-        st.success("🎉 Úspěšně zapsáno a trvale uloženo!")
-        st.rerun()
-      else:
-        st.error(
-            "❌ Chyba při zápisu na GitHub. Zkontrolujte nastavení Secrets."
+    # Exportní tlačítko
+    if not st.session_state.df_db.empty:
+        csv_bytes = st.session_state.df_db.to_csv(index=False).encode("utf-8-sig")
+        st.download_button(
+            label="📥 Stáhnout přehled databáze (CSV/Excel)",
+            data=csv_bytes,
+            file_name=f"rezervace_dummy_{datetime.now().strftime('%Y%m%d')}.csv",
+            mime="text/csv",
         )
 
-with col2:
-  st.header("📊 Přehled databáze")
-
-  filtr = st.multiselect(
-      "Filtrovat podle artiklu:", options=DUMMY_ARTIKLY, default=[]
-  )
-  df_view = df_db.copy()
-
-  if not df_view.empty:
-    today_date = datetime.today().date()
-
-    def urci_stav(row):
-      d_od = pd.to_datetime(row["Datum Od"]).date()
-      d_do = pd.to_datetime(row["Datum Do"]).date()
-      if d_do < today_date:
-        return "⚪ Minulá"
-      elif d_od <= today_date <= d_do:
-        return "🟢 Aktivní"
-      else:
-        return "🔵 Plánovaná"
-
-    df_view["Stav"] = df_view.apply(urci_stav, axis=1)
-
-    # Přebudování pořadí sloupců pro přehlednost
-    cols = [
-        "Stav",
-        "ID",
-        "Artikl",
-        "Název akce",
-        "Datum Od",
-        "Datum Do",
-        "Filiálka",
-        "KW",
-    ]
-    df_view = df_view[cols]
-
-  if filtr:
-    df_view = df_view[df_view["Artikl"].astype(str).isin(filtr)]
-
-  st.dataframe(df_view, use_container_width=True, hide_index=True)
-
-  # Exportní tlačítko
-  if not df_db.empty:
-    csv_bytes = df_db.to_csv(index=False).encode("utf-8-sig")
-    st.download_button(
-        label="📥 Stáhnout přehled databáze (CSV/Excel)",
-        data=csv_bytes,
-        file_name=f"rezervace_dummy_{datetime.now().strftime('%Y%m%d')}.csv",
-        mime="text/csv",
-    )
-
-  with st.expander("🗑️ Storno / Smazání rezervace"):
-    if not df_db.empty:
-      id_smazat = st.number_input(
-          "Zadejte ID rezervace ke smazání:",
-          min_value=1,
-          max_value=int(df_db["ID"].max()),
-          step=1,
-      )
-      if st.button("Smazat záznam", type="secondary"):
-        if id_smazat in df_db["ID"].values:
-          df_upraveno = df_db[df_db["ID"] != id_smazat]
-          if uloz_databazi(df_upraveno, current_sha):
-            st.success(f"Rezervace ID {id_smazat} byla odstraněna.")
-            st.rerun()
-          else:
-            st.error("❌ Chyba při mazání z GitHubu.")
-        else:
-          st.warning("Zadané ID v databázi neexistuje.")
+    with st.expander("🗑️ Storno / Smazání rezervace"):
+        if not st.session_state.df_db.empty:
+            # Ošetření, aby max_value fungovalo i když by bylo ID prázdné
+            max_id = int(st.session_state.df_db["ID"].max()) if not st.session_state.df_db["ID"].isna().all() else 1
+            id_smazat = st.number_input(
+                "Zadejte ID rezervace ke smazání:",
+                min_value=1,
+                max_value=max(1, max_id),
+                step=1,
+            )
+            if st.button("Smazat záznam", type="secondary"):
+                if id_smazat in st.session_state.df_db["ID"].values:
+                    df_upraveno = st.session_state.df_db[st.session_state.df_db["ID"] != id_smazat]
+                    success, new_sha = uloz_databazi(df_upraveno, st.session_state.current_sha)
+                    if success:
+                        st.session_state.df_db = df_upraveno
+                        st.session_state.current_sha = new_sha # Uložíme nové SHA
+                        st.success(f"Rezervace ID {id_smazat} byla odstraněna.")
+                        st.rerun()
+                    else:
+                        st.error("❌ Chyba při mazání z GitHubu.")
+                else:
+                    st.warning("Zadané ID v databázi neexistuje.")
